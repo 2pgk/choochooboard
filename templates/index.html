@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Live Departures</title>
+<style>
+  body { background: black; color: yellow; font-family: monospace; margin: 0; padding: 20px; }
+  h1 {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 10px;
+  }
+  #stationName {
+    font-weight: normal;
+    color: yellow;
+  }
+  #stationForm { text-align: center; margin-bottom: 10px; }
+  input, button { font-size: 16px; padding: 5px; margin-left: 8px; }
+  table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+  th, td { border-bottom: 1px solid #444; padding: 8px; text-align: left; }
+  th { background: #222; }
+  #footer { position: fixed; bottom: 5px; left: 10px; color: #555; font-size: 14px; font-family: Arial, sans-serif; }
+</style>
+</head>
+<body>
+
+<h1>
+  <span>📋 Live Departures - </span>
+  <span id="stationName"></span>
+</h1>
+
+<div id="stationForm">
+  <label for="stationInput">Station Code:</label>
+  <input type="text" id="stationInput" maxlength="3" value="LBT" />
+  <button id="changeStationBtn">Change Station</button>
+  <button id="announcementBtn">🔊 Play Announcement</button>
+</div>
+
+<table id="departuresTable">
+  <thead>
+    <tr><th>Time</th><th>Destination</th><th>Platform</th><th>Status</th></tr>
+  </thead>
+  <tbody id="departuresBody"><tr><td colspan="4">Loading...</td></tr></tbody>
+</table>
+
+<div id="footer">Made by Callum F</div>
+
+<script>
+let currentStation = 'LBT';
+let lastAnnouncementAudio = [];
+
+async function fetchDepartures(station) {
+  try {
+    const res = await fetch(`/api/data?station=${station}`);
+    if (!res.ok) throw new Error('Failed to fetch');
+    return await res.json();
+  } catch (e) {
+    console.error('Error fetching departures:', e);
+    return null;
+  }
+}
+
+function renderDepartures(data) {
+  const tbody = document.getElementById('departuresBody');
+  if (!data || !data.departures || data.departures.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="4">No departures available.</td></tr>';
+    document.getElementById('stationName').textContent = '';
+    return;
+  }
+  lastAnnouncementAudio = data.announcement_audio || [];
+
+  // Update station name next to Live Departures
+  document.getElementById('stationName').textContent = data.station_name || '';
+
+  tbody.innerHTML = '';
+  for (const dep of data.departures) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${dep.time}</td>
+      <td>${dep.destination}</td>
+      <td>${dep.platform}</td>
+      <td>${dep.status}</td>
+    `;
+    tbody.appendChild(tr);
+  }
+}
+
+async function updateDepartures() {
+  const data = await fetchDepartures(currentStation);
+  renderDepartures(data);
+}
+
+function playAudioSequence(urls) {
+  return new Promise((resolve) => {
+    if (!urls || urls.length === 0) {
+      resolve();
+      return;
+    }
+    let i = 0;
+    const audio = new Audio();
+    audio.src = urls[i];
+    audio.play().catch(() => {
+      next();
+    });
+
+    audio.onended = () => {
+      i++;
+      if (i >= urls.length) {
+        resolve();
+      } else {
+        audio.src = urls[i];
+        audio.play().catch(() => next());
+      }
+    };
+
+    function next() {
+      i++;
+      if (i >= urls.length) {
+        resolve();
+      } else {
+        audio.src = urls[i];
+        audio.play().catch(() => next());
+      }
+    }
+  });
+}
+
+document.getElementById('changeStationBtn').addEventListener('click', () => {
+  const input = document.getElementById('stationInput').value.trim().toUpperCase();
+  if (input.length !== 3) {
+    alert('Please enter a valid 3-letter station code.');
+    return;
+  }
+  currentStation = input;
+  updateDepartures();
+});
+
+document.getElementById('announcementBtn').addEventListener('click', async () => {
+  if (!lastAnnouncementAudio || lastAnnouncementAudio.length === 0) {
+    alert('No announcement audio available.');
+    return;
+  }
+  await playAudioSequence(lastAnnouncementAudio);
+});
+
+updateDepartures();
+setInterval(updateDepartures, 60000); // Refresh every 60 seconds
+</script>
+
+</body>
+</html>
