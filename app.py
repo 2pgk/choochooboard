@@ -67,7 +67,7 @@ def index():
 
 @app.route("/api/data")
 def get_departures():
-    station_code = request.args.get('station', 'LBT').upper()
+    station_code = request.args.get('station', 'GLQ').upper()
     url = f'https://api.rtt.io/api/v1/json/search/{station_code}'
 
     try:
