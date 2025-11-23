@@ -5,23 +5,27 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Live Departures</title>
 <style>
-  body { background: black; color: yellow; font-family: monospace; margin: 0; padding: 20px; }
-  h1 {
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    gap: 10px;
-  }
-  #stationName {
-    font-weight: normal;
-    color: yellow;
-  }
-  #stationForm { text-align: center; margin-bottom: 10px; }
-  input, button { font-size: 16px; padding: 5px; margin-left: 8px; }
-  table { width: 100%; border-collapse: collapse; margin-top: 10px; }
-  th, td { border-bottom: 1px solid #444; padding: 8px; text-align: left; }
-  th { background: #222; }
-  #footer { position: fixed; bottom: 5px; left: 10px; color: #555; font-size: 14px; font-family: Arial, sans-serif; }
+body { background: black; color: yellow; font-family: monospace; margin: 0; padding: 20px; }
+h1 { display: flex; justify-content: center; align-items: center; gap: 10px; }
+#stationName { font-weight: normal; color: yellow; }
+#stationForm { text-align: center; margin-bottom: 10px; position: relative; }
+input, button { font-size: 16px; padding: 5px; margin-left: 8px; }
+table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+th, td { border-bottom: 1px solid #444; padding: 8px; text-align: left; }
+th { background: #222; }
+.detail-row { background: #111; color: #ff0; font-size: 14px; }
+.departure-row:hover { cursor: pointer; background: #222; }
+/* Status colors */
+.status-ontime { color: yellow; font-weight: bold; }
+.status-delayed { color: orange; font-weight: bold; }
+.status-cancelled { color: red; font-weight: bold; }
+/* Autocomplete */
+#suggestions { list-style:none; padding-left:0; margin-top:2px; max-height:150px; overflow-y:auto; background:#222; color:yellow; position:absolute; width:300px; z-index:1000; }
+#suggestions li { padding:5px; }
+#suggestions li:hover { background:#444; cursor:pointer; }
+/* Speaker emoji */
+.speaker-emoji { cursor:pointer; margin-left:5px; }
+#footer { position: fixed; bottom: 5px; left: 10px; color: #555; font-size: 14px; font-family: Arial, sans-serif; }
 </style>
 </head>
 <body>
@@ -32,8 +36,9 @@
 </h1>
 
 <div id="stationForm">
-  <label for="stationInput">Station Code:</label>
-  <input type="text" id="stationInput" maxlength="3" value="GLQ" />
+  <label for="stationInput">Station:</label>
+  <input type="text" id="stationInput" placeholder="Start typing..." value="GLQ" />
+  <ul id="suggestions"></ul>
   <button id="changeStationBtn">Change Station</button>
   <button id="announcementBtn">🔊 Play Announcement</button>
 </div>
@@ -49,104 +54,125 @@
 
 <script>
 let currentStation = 'GLQ';
+let stationsList = [];
 let lastAnnouncementAudio = [];
 
-async function fetchDepartures(station) {
-  try {
-    const res = await fetch(`/api/data?station=${station}`);
-    if (!res.ok) throw new Error('Failed to fetch');
-    return await res.json();
-  } catch (e) {
-    console.error('Error fetching departures:', e);
-    return null;
-  }
+// ---------- Autocomplete ----------
+async function fetchStations(){
+  try{
+    const res = await fetch('/api/stations');
+    stationsList = await res.json();
+  }catch(e){ console.error(e); }
 }
 
-function renderDepartures(data) {
-  const tbody = document.getElementById('departuresBody');
-  if (!data || !data.departures || data.departures.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="4">No departures available.</td></tr>';
-    document.getElementById('stationName').textContent = '';
-    return;
-  }
-  lastAnnouncementAudio = data.announcement_audio || [];
+const stationInput = document.getElementById('stationInput');
+const suggestions = document.getElementById('suggestions');
 
-  // Update station name next to Live Departures
-  document.getElementById('stationName').textContent = data.station_name || '';
-
-  tbody.innerHTML = '';
-  for (const dep of data.departures) {
-    const tr = document.createElement('tr');
-    tr.innerHTML = `
-      <td>${dep.time}</td>
-      <td>${dep.destination}</td>
-      <td>${dep.platform}</td>
-      <td>${dep.status}</td>
-    `;
-    tbody.appendChild(tr);
-  }
-}
-
-async function updateDepartures() {
-  const data = await fetchDepartures(currentStation);
-  renderDepartures(data);
-}
-
-function playAudioSequence(urls) {
-  return new Promise((resolve) => {
-    if (!urls || urls.length === 0) {
-      resolve();
-      return;
-    }
-    let i = 0;
-    const audio = new Audio();
-    audio.src = urls[i];
-    audio.play().catch(() => {
-      next();
+stationInput.addEventListener('input', ()=>{
+  const query = stationInput.value.toLowerCase().trim();
+  suggestions.innerHTML='';
+  if(!query) return;
+  const matches = stationsList.filter(s=>s.name.toLowerCase().includes(query)).slice(0,10);
+  matches.forEach(s=>{
+    const li = document.createElement('li');
+    li.textContent = `${s.name} (${s.crs})`;
+    li.addEventListener('click', ()=>{
+      stationInput.value = s.crs;
+      suggestions.innerHTML='';
     });
+    suggestions.appendChild(li);
+  });
+});
+document.addEventListener('click', e=>{ if(!stationInput.contains(e.target)) suggestions.innerHTML=''; });
 
-    audio.onended = () => {
-      i++;
-      if (i >= urls.length) {
-        resolve();
-      } else {
-        audio.src = urls[i];
-        audio.play().catch(() => next());
-      }
-    };
+// ---------- Departures ----------
+async function fetchDepartures(station){
+  try{
+    const res = await fetch(`/api/data?station=${station}`);
+    if(!res.ok) throw new Error('Failed to fetch');
+    return await res.json();
+  }catch(e){ console.error(e); return null; }
+}
 
-    function next() {
+function convertToStandardTime(militaryTime){ if(!militaryTime||militaryTime.length!==4) return militaryTime; return militaryTime.slice(0,2)+':'+militaryTime.slice(2); }
+
+function playAudioSequence(urls){
+  return new Promise(resolve=>{
+    if(!urls||urls.length===0) return resolve();
+    let i=0;
+    const audio=new Audio();
+    audio.src=urls[i];
+    audio.play().catch(()=>next());
+    audio.onended=()=>next();
+    function next(){
       i++;
-      if (i >= urls.length) {
-        resolve();
-      } else {
-        audio.src = urls[i];
-        audio.play().catch(() => next());
-      }
+      if(i>=urls.length) resolve();
+      else { audio.src=urls[i]; audio.play().catch(()=>next()); }
     }
   });
 }
 
-document.getElementById('changeStationBtn').addEventListener('click', () => {
-  const input = document.getElementById('stationInput').value.trim().toUpperCase();
-  if (input.length !== 3) {
-    alert('Please enter a valid 3-letter station code.');
+function renderDepartures(data){
+  const tbody = document.getElementById('departuresBody');
+  if(!data || !data.departures || data.departures.length===0){
+    tbody.innerHTML='<tr><td colspan="4">No departures available.</td></tr>';
+    document.getElementById('stationName').textContent='';
     return;
   }
-  currentStation = input;
+  lastAnnouncementAudio = data.departures[0].announcement_audio || [];
+  document.getElementById('stationName').textContent = data.station_name||'';
+  tbody.innerHTML='';
+
+  data.departures.forEach(dep=>{
+    const tr = document.createElement('tr');
+    tr.classList.add('departure-row');
+
+    let statusClass='status-ontime';
+    if(dep.status.toLowerCase().includes('cancel')) statusClass='status-cancelled';
+    else if(dep.status.toLowerCase().includes('delay')) statusClass='status-delayed';
+
+    tr.innerHTML = `<td>${convertToStandardTime(dep.time)}</td>
+                    <td>${dep.destination}</td>
+                    <td>${dep.platform}</td>
+                    <td class="${statusClass}">${dep.status}</td>`;
+    tbody.appendChild(tr);
+
+    const detailRow = document.createElement('tr');
+    detailRow.classList.add('detail-row');
+    detailRow.style.display='none';
+    detailRow.innerHTML = `<td colspan="4">
+      <strong>Final Destination:</strong> ${dep.final_destination || dep.destination}
+      <span class="speaker-emoji" title="Play announcement">🔊</span><br>
+      <strong>Calling Points:</strong> ${dep.calling_points && dep.calling_points.length ? dep.calling_points.join(', ') : 'None'}<br>
+      <strong>Platform Confirmed:</strong> ${dep.platform_confirmed ? 'Yes' : 'No'}<br>
+      <strong>Scheduled / Estimated:</strong> ${convertToStandardTime(dep.scheduled)} / ${dep.realtime || 'N/A'}
+    </td>`;
+    tbody.appendChild(detailRow);
+
+    const speaker = detailRow.querySelector('.speaker-emoji');
+    speaker.addEventListener('click', ()=>playAudioSequence(dep.announcement_audio));
+
+    tr.addEventListener('click', ()=>{ detailRow.style.display = detailRow.style.display==='none'?'table-row':'none'; });
+  });
+}
+
+async function updateDepartures(){
+  const data = await fetchDepartures(currentStation);
+  renderDepartures(data);
+}
+
+document.getElementById('changeStationBtn').addEventListener('click', ()=>{
+  const input = document.getElementById('stationInput').value.trim().toUpperCase();
+  if(input.length!==3) return alert('Please enter a valid 3-letter station code.');
+  currentStation=input;
   updateDepartures();
 });
 
-document.getElementById('announcementBtn').addEventListener('click', async () => {
-  if (!lastAnnouncementAudio || lastAnnouncementAudio.length === 0) {
-    alert('No announcement audio available.');
-    return;
-  }
-  await playAudioSequence(lastAnnouncementAudio);
-});
+document.getElementById('announcementBtn').addEventListener('click', ()=>playAudioSequence(lastAnnouncementAudio));
 
 updateDepartures();
-setInterval(updateDepartures, 60000); // Refresh every 60 seconds
+setInterval(updateDepartures,60000);
+fetchStations();
 </script>
 
 </body>
